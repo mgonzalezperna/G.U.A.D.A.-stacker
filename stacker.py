@@ -1,9 +1,6 @@
 import os
 import time
-import sys
-import getopt
 
-from itertools import chain
 from fractions import Fraction
 
 import numpy as np
@@ -17,7 +14,6 @@ except ImportError:
 
 WIDTH = 3280
 HEIGHT = 2464
-CUTOFF = 150
 
 
 def log(data):
@@ -43,6 +39,28 @@ def get_camera():
     camera.iso = 800
     time.sleep(2)
     return camera
+
+
+class Config:
+
+    with_profiling = False
+    with_camera = False
+    folder = '/'
+
+    def __init__(self):
+        import sys
+        import getopt
+        print('Argument List:', str(sys.argv))
+        optlist, _ = getopt.getopt(
+            sys.argv, 'cpf:',  ['camera', 'profile', 'folder='])
+        # '--camera --profile --folder /lights'
+        for o, a in optlist:
+            if o in ("-p", "--profile"):
+                self.with_profiling = True
+            elif o in ("-c", "--camera"):
+                self.with_camera = True
+            elif o in ("-f", "--folder"):
+                self.folder = a
 
 
 class Offset:
@@ -76,9 +94,23 @@ class Stacker:
         # Imagen resultado como una matriz de 3 dimensiones
         self.result = None
 
+        self.cutoff = 150
+
     def stack(self, im):
         # Apilo la imagen con el resultado previo
-        offset = self.find_alignment(im)  # Busco la mejor alineacion
+
+        # Busco la mejor alineacion
+        offset, im_reference_x, im_reference_y = self.find_alignment(im)
+
+        # Agrego los valores de referencia de la imagen al total global
+        np.add(
+            self.cut_offset.x.reference, im_reference_x,
+            dtype=np.uint32, out=self.cut_offset.x.reference
+        )
+        np.add(
+            self.cut_offset.y.reference, im_reference_y,
+            dtype=np.uint32, out=self.cut_offset.y.reference
+        )
 
         # Muevo los valores (pixeles) para alinear la imagen
         im = np.roll(im, offset.x.value, axis=1)  # En el eje X (Ancho)
@@ -113,88 +145,61 @@ class Stacker:
         # Busco la mejor alineacion
 
         # Promedio de las imagenes de referencia (ya que se van sumando)
-        referenceIm1x = self.cut_offset.x.reference // self.total_stacks
-        referenceIm1y = self.cut_offset.y.reference // self.total_stacks
+        reference_im1_x = self.cut_offset.x.reference // self.total_stacks
+        reference_im1_y = self.cut_offset.y.reference // self.total_stacks
 
         # Tomo los valores de referencia para los ejes
-        referenceIm2x, referenceIm2y = self.get_reference_array(im)
+        reference_im2_x, reference_im2_y = self.get_reference_array(im)
 
-        bestOffset = ImgOffsets()  # Contiene el mejor resultado obtenido
-
-        # Se intenta un alineamiento inicial sin desfasaje
+        best_offset = ImgOffsets()  # Contiene el mejor resultado obtenido
 
         # Para eje X
-        self.try_alignment(
-            referenceIm1x, referenceIm2x, bestOffset.x, 0,
-            self.cut_offset.x.value
+        best_offset.x = self.try_alignment(
+            reference_im1_x, reference_im2_x, self.cut_offset.x.value
         )
 
         # Para eje Y
-        self.try_alignment(
-            referenceIm1y, referenceIm2y, bestOffset.y, 0,
-            self.cut_offset.y.value
+        best_offset.y = self.try_alignment(
+            reference_im1_y, reference_im2_y, self.cut_offset.y.value
         )
 
-        # Se intenta alineamientos con un desfasaje de -9 a 9
-        for off in chain(range(-CUTOFF, 0), range(1, CUTOFF)):
-            # Para eje X
-            self.try_alignment(
-                referenceIm1x, referenceIm2x, bestOffset.x, off,
-                self.cut_offset.x.value
-            )
-            # Para eje Y
-            self.try_alignment(
-                referenceIm1y, referenceIm2y, bestOffset.y, off,
-                self.cut_offset.y.value
-            )
-
-        log("Aligned at: x:%s y: %s v: %s" % (
-            bestOffset.x.value,
-            bestOffset.y.value,
-            bestOffset.getTotalDiff()))
+        log(f"""Aligned at:
+        x: {best_offset.x.value} y: {best_offset.y.value}
+        v: {best_offset.getTotalDiff()}""")
 
         # Muevo los valores (pixeles) de las referencias de la imagen con el
         # mejor valor de alineamiento
-        referenceIm2x = np.roll(referenceIm2x, bestOffset.x.value, axis=0)
-        referenceIm2y = np.roll(referenceIm2y, bestOffset.y.value, axis=0)
+        reference_im2_x = np.roll(reference_im2_x, best_offset.x.value, axis=0)
+        reference_im2_y = np.roll(reference_im2_y, best_offset.y.value, axis=0)
 
-        # Agrego los valores de referencia de la imagen al total global
-        np.add(
-            self.cut_offset.x.reference,
-            referenceIm2x,
-            dtype=np.uint32,
-            out=self.cut_offset.x.reference,
-        )
-        np.add(
-            self.cut_offset.y.reference,
-            referenceIm2y,
-            dtype=np.uint32,
-            out=self.cut_offset.y.reference,
-        )
+        return best_offset, reference_im2_x, reference_im2_y
 
-        return bestOffset
+    def try_alignment(self, im1, im2, cut_value):
+        best_offset_axis = Offset()  # Contiene el mejor resultado obtenido
 
-    def try_alignment(self, im1, im2, bestOffsetAxis, offset, cutValue):
-        # Pruevo el alineamiento con los valores dados
-        diff = self.get_alignment(im1, im2, offset, cutValue)
-        if diff < bestOffsetAxis.diff:
-            # Si la diferencia es menor a todas las previas guardo su valor
-            bestOffsetAxis.diff = diff
-            bestOffsetAxis.value = offset
+        # Se intenta alineamientos con un desfasaje de -cutoff a cutoff
+        for off in range(-self.cutoff, self.cutoff):
+            # Pruevo el alineamiento con los valores dados
+            diff = self.get_alignment(im1, im2, off, cut_value)
+            if diff < best_offset_axis.diff:
+                # Si la diferencia es menor a todas las previas guardo su valor
+                best_offset_axis.diff = diff
+                best_offset_axis.value = off
+        return best_offset_axis
 
-    def get_alignment(self, im1, im2, offset, cutValue):
+    def get_alignment(self, im1, im2, offset, cut_value):
         # Calculo cuanto de los bordes tengo que cortar
-        toCutIm1S = max(cutValue, offset)
-        toCutIm1E = max(cutValue, -offset)
-        toCutIm2S = max(0, cutValue - offset)
-        toCutIm2E = max(0, cutValue + offset)
+        to_cut_im1_s = max(cut_value, offset)
+        to_cut_im1_e = max(cut_value, -offset)
+        to_cut_im2_s = max(0, cut_value - offset)
+        to_cut_im2_e = max(0, cut_value + offset)
 
         # Tomo las imagenes cortadas
-        im1C = im1[toCutIm1S:im1.shape[0] - 1 - toCutIm1E, :]
-        im2C = im2[toCutIm2S:im2.shape[0] - 1 - toCutIm2E, :]
+        im1_c = im1[to_cut_im1_s:im1.shape[0] - 1 - to_cut_im1_e, :]
+        im2_c = im2[to_cut_im2_s:im2.shape[0] - 1 - to_cut_im2_e, :]
 
         # Diferencia
-        im_diff = np.subtract(im1C, im2C, dtype=np.int32)
+        im_diff = np.subtract(im1_c, im2_c, dtype=np.int32)
         # Diferencia absoluta (positiva)
         im_diff = np.absolute(im_diff, out=im_diff)
 
@@ -211,17 +216,17 @@ class Stacker:
             if i == 3:
                 break
 
-            filePath = os.path.join(path, file)
-            log("Apilamiento %s con %s" % (self.total_stacks, filePath))
+            file_path = os.path.join(path, file)
+            log(f"Apilamiento {self.total_stacks} con {file_path}")
 
             start_time = time.time()  # Tomo el tiempo proceso para la imagen
-            img = Image.open(filePath)  # Abro la imagen
-            log("Read time: " + str(time.time() - start_time))
+            img = Image.open(file_path)  # Abro la imagen
+            log(f"Read time: {time.time() - start_time}")
 
             start_time = time.time()  # Tomo el tiempo proceso para la imagen
             im_array = np.asarray(img)  # Tomo la matriz
             img.close()
-            log("To Array time: " + str(time.time() - start_time))
+            log(f"To Array time: {time.time() - start_time}")
 
             start_time = time.time()  # Tomo el tiempo proceso para la imagen
             # La primera imagen la guardo como resultado
@@ -236,14 +241,14 @@ class Stacker:
                 self.result = self.stack(im_array)
                 self.total_stacks += 1
 
-            log("Process time: " + str(time.time() - start_time))
+            log(f"Process time: {time.time() - start_time}")
 
     def process_from_camera(self):
         camera = get_camera()
 
         # Busco todas las imagenes en la carpeta l que tengan extension .tif
-        for i in range(5):
-            log("Apilamiento: %s" % self.total_stacks)
+        for _ in range(5):
+            log(f"Apilamiento: {self.total_stacks}")
             start_time = time.time()  # Tomo el tiempo proceso para la imagen
 
             im_array = get_image(camera)
@@ -261,11 +266,14 @@ class Stacker:
                 self.result = self.stack(im_array)
                 self.total_stacks += 1
 
-            log("Elapsed time: " + str(time.time() - start_time))
+            log(f"Elapsed time: {time.time() - start_time}")
             # if self.result is not None:
             #     self.save_image()
 
     def save_image(self):
+
+        if self.result is None:
+            raise Exception("No existe un resultado!")
         # Tomo el promedio (ya que se suman)
         result = np.uint8(self.result // self.total_stacks)
         # finalResult = np.clip(finalResult, 8, None)-8
@@ -276,10 +284,10 @@ class Stacker:
         # image = image.filter(
         #   ImageFilter.UnsharpMask(radius=2, percent=250, threshold=7))
 
-        fname = time.strftime("%Y%m%d-%H%M%S") + ".tif"
-        image.save(fname, "TIFF")
+        f_name = time.strftime("%Y%m%d-%H%M%S") + ".tif"
+        image.save(f_name, "TIFF")
         image.close()
-        log("Saved: %s" % fname)
+        log(f"Saved: {f_name}")
 
 
 def main():
@@ -287,37 +295,21 @@ def main():
     import pstats
     from io import StringIO
 
-    print('Argument List:', str(sys.argv))
-
-    optlist = getopt.getopt(
-        sys.argv, 'cpf:',  ['camera', 'profile', 'folder='])[0]
-    # '--camera --profile --folder /lights'
-
-    with_profile = False
-    with_camera = False
-    folder = '/'
-
-    for o, a in optlist:
-        if o in ("-p", "--profile"):
-            with_profile = True
-        elif o in ("-c", "--camera"):
-            with_camera = True
-        elif o in ("-f", "--folder"):
-            folder = a
+    config = Config()
 
     pr = cProfile.Profile()
-    if with_profile:
+    if config.with_profiling:
         pr.enable()
 
     stacker = Stacker()
     # Tomo el tiempo de ejecucion para el script
     start_time = time.time()
-    if with_camera:
+    if config.with_camera:
         stacker.process_from_camera()
     else:
-        stacker.process_from_filesystem(folder)
+        stacker.process_from_filesystem(config.folder)
     stacker.save_image()
-    log("Total elapsed time: " + str(time.time() - start_time))
+    log(f"Total elapsed time: {time.time() - start_time}")
 
     pr.disable()
     s = StringIO()
@@ -328,7 +320,7 @@ def main():
 
 if __name__ == "__main__":
     start = time.strftime("%Y%m%d-%H%M%S")
-    log("Started at %s:" % start)
+    log(f"Started at: {start}")
     main()
     end = time.strftime("%Y%m%d-%H%M%S")
-    log("Ended at %s:\n" % end)
+    log(f"Ended at: {end}\n")
