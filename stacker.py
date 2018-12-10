@@ -1,5 +1,7 @@
 import os
 import time
+import sys
+import getopt
 
 from itertools import chain
 from fractions import Fraction
@@ -147,9 +149,9 @@ class Stacker:
             )
 
         log("Aligned at: x:%s y: %s v: %s" % (
-              bestOffset.x.value,
-              bestOffset.y.value,
-              bestOffset.getTotalDiff()))
+            bestOffset.x.value,
+            bestOffset.y.value,
+            bestOffset.getTotalDiff()))
 
         # Muevo los valores (pixeles) de las referencias de la imagen con el
         # mejor valor de alineamiento
@@ -281,17 +283,39 @@ class Stacker:
 
 
 def main():
-    import cProfile, pstats
+    import cProfile
+    import pstats
     from io import StringIO
 
+    print('Argument List:', str(sys.argv))
+
+    optlist = getopt.getopt(
+        sys.argv, 'cpf:',  ['camera', 'profile', 'folder='])[0]
+    # '--camera --profile --folder /lights'
+
+    with_profile = False
+    with_camera = False
+    folder = '/'
+
+    for o, a in optlist:
+        if o in ("-p", "--profile"):
+            with_profile = True
+        elif o in ("-c", "--camera"):
+            with_camera = True
+        elif o in ("-f", "--folder"):
+            folder = a
+
     pr = cProfile.Profile()
-    pr.enable()
+    if with_profile:
+        pr.enable()
 
     stacker = Stacker()
     # Tomo el tiempo de ejecucion para el script
     start_time = time.time()
-    # stacker.process_from_filesystem("./set/orion/")
-    stacker.process_from_camera()
+    if with_camera:
+        stacker.process_from_camera()
+    else:
+        stacker.process_from_filesystem(folder)
     stacker.save_image()
     log("Total elapsed time: " + str(time.time() - start_time))
 
@@ -300,7 +324,6 @@ def main():
     sortby = 'cumulative'
     ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
     ps.dump_stats("states.ps")
-
 
 
 if __name__ == "__main__":
