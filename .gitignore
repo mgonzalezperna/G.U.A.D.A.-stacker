@@ -1,3 +1,5 @@
 .mypy_cache/*
 .vscode/*
 logs.txt
+*.tif
+Thumbs.db

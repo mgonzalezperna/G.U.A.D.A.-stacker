@@ -45,90 +45,102 @@ class Config:
 
     with_profiling = False
     with_camera = False
-    folder = '/'
+    inputFolder = 'test'
+    outputFolder = './'
 
     def __init__(self):
         import sys
         import getopt
-        print('Argument List:', str(sys.argv))
         optlist, _ = getopt.getopt(
-            sys.argv, 'cpf:',  ['camera', 'profile', 'folder='])
-        # '--camera --profile --folder /lights'
+            sys.argv[1:], 'cpi:o:',  ['camera', 'profile', 'input=', 'output='])
+        # '--camera --profile --input /lights'
         for o, a in optlist:
             if o in ("-p", "--profile"):
                 self.with_profiling = True
             elif o in ("-c", "--camera"):
                 self.with_camera = True
-            elif o in ("-f", "--folder"):
-                self.folder = a
+            elif o in ("-i", "--input"):
+                self.inputFolder = a
+            elif o in ("-o", "--output"):
+                self.outputFolder = a if a.endswith("/") else a + "/"
 
 
-class Offset:
-    # Los valores son sobre un eje X o Y
-    value = 0  # Valor en cantidad de pixeles que se movio la imagen actual
+class ImgReference:
+    # Imagen de referencia
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+    def __floordiv__(self, other):
+        return ImgReference(self.x//other, self.y//other)
+
+    def add(self, other):
+        np.add(self.x, other.x, dtype=np.uint32, out=self.x)
+        np.add(self.y, other.y, dtype=np.uint32, out=self.y)
+
+
+class ImgCutoff:
+    # Valor en cantidad de pixeles que se movio la imagen actual
     # Ademas se utiliza para ignorar los datos de los bordes en la alineacion
     # (Se podria separar en derecha/izquierda o arriba/abajo)
-    diff = float("inf")  # Diferencia entre la referencia y la actual
-    # Imagen de referencia
-    reference = None
-
-
-class ImgOffsets:
-    # Define los valores para los dos ejes
     def __init__(self):
-        self.x = Offset()
-        self.y = Offset()
+        self.left = 0
+        self.right = 0
+        self.top = 0
+        self.bottom = 0
 
-    def getTotalDiff(self):
-        return self.x.diff + self.y.diff
+
+class ImgDiscrepancy:
+    # Diferencia entre la referencia y la actual
+    def __init__(self):
+        self.x = float("inf")
+        self.y = float("inf")
+
+    def get_total_diff(self):
+        return self.x + self.y
 
 
 class Stacker:
     def __init__(self):
-        # Guardara el maximo de corrimiento que tuvo una
-        self.cut_offset = ImgOffsets()
-
         # Total de imagenes procesadas (Para calcular el promedio)
         self.total_stacks = 1
 
         # Imagen resultado como una matriz de 3 dimensiones
         self.result = None
 
-        self.cutoff = 150
+        self.reference = None
+
+        # Guardara el maximo de corrimiento que tuvo una
+        self.cutoff = ImgCutoff()
+
+        self.max_cutoff = 150
+
+        self.max_dark_to_test = 255  # 128
 
     def stack(self, im):
         # Apilo la imagen con el resultado previo
 
         # Busco la mejor alineacion
-        offset, im_reference_x, im_reference_y = self.find_alignment(im)
+        offset, im_reference = self.find_alignment(im)
 
         # Agrego los valores de referencia de la imagen al total global
-        np.add(
-            self.cut_offset.x.reference, im_reference_x,
-            dtype=np.uint32, out=self.cut_offset.x.reference
-        )
-        np.add(
-            self.cut_offset.y.reference, im_reference_y,
-            dtype=np.uint32, out=self.cut_offset.y.reference
-        )
+        self.reference.add(im_reference)
 
         # Muevo los valores (pixeles) para alinear la imagen
-        im = np.roll(im, offset.x.value, axis=1)  # En el eje X (Ancho)
-        im = np.roll(im, offset.y.value, axis=0)  # En el eje Y (Alto)
+        im = np.roll(im, offset.left, axis=1)  # En el eje X (Ancho)
+        im = np.roll(im, offset.top, axis=0)  # En el eje Y (Alto)
 
         # Si se movio la imagen una cantidad mayor a las veces previas
         # guardo la cantidad para ignorar el borde en los proximos apilamientos
-        self.cut_offset.x.value = max(
-            self.cut_offset.x.value, abs(offset.x.value))
-        self.cut_offset.y.value = max(
-            self.cut_offset.y.value, abs(offset.y.value))
+        self.cutoff.left = max(self.cutoff.left, abs(offset.left))
+        self.cutoff.top = max(self.cutoff.top, abs(offset.top))
 
         # Sumo la matriz resultado con la actual que fue alineada
         return np.add(self.result, im, dtype=np.uint32, out=self.result)
 
     def get_reference_array(self, img):
         # Obtengo los valores de los ejes
-        img = np.clip(img, 128, None)  # Corto los colores mas oscuros
+        img = np.clip(img, self.max_dark_to_test, None)  # Corto los colores mas oscuros
         # Me interesa los mas claros que es donde estan las estrellas
         # Si no lo hago el ruido en la oscuridad puede afectar
         # demaciado el resultado del alineamiento
@@ -139,53 +151,55 @@ class Stacker:
         # Alto x 3 colores
         arrayy = img.sum(axis=1, dtype=np.uint32)
 
-        return arrayx, arrayy
+        return ImgReference(arrayx, arrayy)
 
     def find_alignment(self, im):
         # Busco la mejor alineacion
 
         # Promedio de las imagenes de referencia (ya que se van sumando)
-        reference_im1_x = self.cut_offset.x.reference // self.total_stacks
-        reference_im1_y = self.cut_offset.y.reference // self.total_stacks
+        reference_im1 = self.reference // self.total_stacks
 
         # Tomo los valores de referencia para los ejes
-        reference_im2_x, reference_im2_y = self.get_reference_array(im)
+        reference_im2 = self.get_reference_array(im)
 
-        best_offset = ImgOffsets()  # Contiene el mejor resultado obtenido
+        best_cutoff = ImgCutoff()  # Contiene el mejor resultado obtenido
+        discrepancy = ImgDiscrepancy()
 
         # Para eje X
-        best_offset.x = self.try_alignment(
-            reference_im1_x, reference_im2_x, self.cut_offset.x.value
+        best_cutoff.left, discrepancy.x = self.try_alignment(
+            reference_im1.x, reference_im2.x, self.cutoff.left
         )
 
         # Para eje Y
-        best_offset.y = self.try_alignment(
-            reference_im1_y, reference_im2_y, self.cut_offset.y.value
+        best_cutoff.top, discrepancy.y = self.try_alignment(
+            reference_im1.y, reference_im2.y, self.cutoff.top
         )
 
         log(f"""Aligned at:
-        x: {best_offset.x.value} y: {best_offset.y.value}
-        v: {best_offset.getTotalDiff()}""")
+        x: {best_cutoff.left} y: {best_cutoff.top}
+        v: {discrepancy.get_total_diff()}""")
 
         # Muevo los valores (pixeles) de las referencias de la imagen con el
         # mejor valor de alineamiento
-        reference_im2_x = np.roll(reference_im2_x, best_offset.x.value, axis=0)
-        reference_im2_y = np.roll(reference_im2_y, best_offset.y.value, axis=0)
+        reference_im2.x = np.roll(reference_im2.x, best_cutoff.left, axis=0)
+        reference_im2.y = np.roll(reference_im2.y, best_cutoff.top, axis=0)
 
-        return best_offset, reference_im2_x, reference_im2_y
+        return best_cutoff, reference_im2
 
     def try_alignment(self, im1, im2, cut_value):
-        best_offset_axis = Offset()  # Contiene el mejor resultado obtenido
+        best_cutoff = 0  # Contiene el mejor resultado obtenido
+        best_discrepancy = float("inf")
+        max_cutoff = min(self.max_cutoff, len(im1)//8)
 
-        # Se intenta alineamientos con un desfasaje de -cutoff a cutoff
-        for off in range(-self.cutoff, self.cutoff):
+        # Se intenta alineamientos con un desfasaje de -max_cutoff a max_cutoff
+        for off in range(-max_cutoff, max_cutoff):
             # Pruevo el alineamiento con los valores dados
             diff = self.get_alignment(im1, im2, off, cut_value)
-            if diff < best_offset_axis.diff:
+            if diff < best_discrepancy:
                 # Si la diferencia es menor a todas las previas guardo su valor
-                best_offset_axis.diff = diff
-                best_offset_axis.value = off
-        return best_offset_axis
+                best_discrepancy = diff
+                best_cutoff = off
+        return best_cutoff, best_discrepancy
 
     def get_alignment(self, im1, im2, offset, cut_value):
         # Calculo cuanto de los bordes tengo que cortar
@@ -220,33 +234,23 @@ class Stacker:
             log(f"Apilamiento {self.total_stacks} con {file_path}")
 
             start_time = time.time()  # Tomo el tiempo proceso para la imagen
-            img = Image.open(file_path)  # Abro la imagen
-            log(f"Read time: {time.time() - start_time}")
 
-            start_time = time.time()  # Tomo el tiempo proceso para la imagen
+            img = Image.open(file_path)  # Abro la imagen
             im_array = np.asarray(img)  # Tomo la matriz
             img.close()
+
             log(f"To Array time: {time.time() - start_time}")
 
             start_time = time.time()  # Tomo el tiempo proceso para la imagen
-            # La primera imagen la guardo como resultado
-            if self.result is None:
-                cut_offset = self.cut_offset
-                self.result = np.uint32(im_array)
-                reference = self.get_reference_array(im_array)
-                # Guardo los valores de referencia para los ejes
-                cut_offset.x.reference, cut_offset.y.reference = reference
-            else:
-                # Inicio el apilamiento de la imagen
-                self.result = self.stack(im_array)
-                self.total_stacks += 1
+
+            self.process_im_array(im_array)
 
             log(f"Process time: {time.time() - start_time}")
 
     def process_from_camera(self):
         camera = get_camera()
 
-        # Busco todas las imagenes en la carpeta l que tengan extension .tif
+        # Capturo imagenes desde la camara
         for _ in range(5):
             log(f"Apilamiento: {self.total_stacks}")
             start_time = time.time()  # Tomo el tiempo proceso para la imagen
@@ -254,23 +258,24 @@ class Stacker:
             im_array = get_image(camera)
             log("Got Image")
 
-            # La primera imagen la guardo como resultado
-            if self.result is None:
-                cut_offset = self.cut_offset
-                self.result = np.uint32(im_array)
-                reference = self.get_reference_array(im_array)
-                # Guardo los valores de referencia para los ejes
-                cut_offset.x.reference, cut_offset.y.reference = reference
-            else:
-                # Inicio el apilamiento de la imagen
-                self.result = self.stack(im_array)
-                self.total_stacks += 1
+            self.process_im_array(im_array)
 
             log(f"Elapsed time: {time.time() - start_time}")
             # if self.result is not None:
             #     self.save_image()
 
-    def save_image(self):
+    def process_im_array(self, im_array):
+        # La primera imagen la guardo como resultado
+        if self.result is None:
+            # Guardo los valores de referencia para los ejes
+            self.reference = self.get_reference_array(im_array)
+            self.result = np.uint32(im_array)
+        else:
+            # Inicio el apilamiento de la imagen
+            self.result = self.stack(im_array)
+            self.total_stacks += 1
+
+    def save_image(self, outputFolder):
 
         if self.result is None:
             raise Exception("No existe un resultado!")
@@ -284,7 +289,7 @@ class Stacker:
         # image = image.filter(
         #   ImageFilter.UnsharpMask(radius=2, percent=250, threshold=7))
 
-        f_name = time.strftime("%Y%m%d-%H%M%S") + ".tif"
+        f_name = outputFolder + time.strftime("%Y%m%d-%H%M%S") + ".tif"
         image.save(f_name, "TIFF")
         image.close()
         log(f"Saved: {f_name}")
@@ -292,9 +297,6 @@ class Stacker:
 
 def main():
     import cProfile
-    import pstats
-    from io import StringIO
-
     config = Config()
 
     pr = cProfile.Profile()
@@ -307,14 +309,21 @@ def main():
     if config.with_camera:
         stacker.process_from_camera()
     else:
-        stacker.process_from_filesystem(config.folder)
-    stacker.save_image()
+        stacker.process_from_filesystem(config.inputFolder)
+    stacker.save_image(config.outputFolder)
     log(f"Total elapsed time: {time.time() - start_time}")
+    
+    if config.with_profiling:
+        pr.disable()
+        save_profile(pr)
 
-    pr.disable()
+
+def save_profile(profile):
+    import pstats
+    from io import StringIO
     s = StringIO()
     sortby = 'cumulative'
-    ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
+    ps = pstats.Stats(profile, stream=s).sort_stats(sortby)
     ps.dump_stats("states.ps")
 
 
