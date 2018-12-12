@@ -221,7 +221,7 @@ class Stacker:
     def process_from_filesystem(self, path):
 
         parent_conn, child_conn = Pipe()
-        p = Process(target=get_images, args=(path, child_conn,))
+        p = Process(target=self.get_images_from_path, args=(child_conn, path,))
         p.start()
 
         running = True
@@ -235,7 +235,30 @@ class Stacker:
                 self.process_im_array(im_array)
                 log(f"Process time: {time.time() - start_time}")
         p.join()
-        
+
+    def get_images_from_path(self, conn, path):
+
+        # Busco todas las imagenes en la carpeta l que tengan extension .tif
+        i = 0
+        for file in os.listdir(path):
+            if not file.endswith(".tif") and not file.endswith(".TIF"):
+                continue
+            i += 1
+            file_path = os.path.join(path, file)
+            log(f"Apilamiento {i} con {file_path}")
+
+            start_time = time.time()  # Tomo el tiempo proceso para la imagen
+
+            img = Image.open(file_path)  # Abro la imagen
+            im_array = np.asarray(img)  # Tomo la matriz
+            img.close()
+
+            log(f"To Array time: {time.time() - start_time}")
+
+            conn.send(im_array)
+        conn.send(None)
+        conn.close()
+
     def process_from_camera(self):
         camera = get_camera()
 
@@ -285,30 +308,6 @@ class Stacker:
         image.save(f_name, "TIFF")
         image.close()
         log(f"Saved: {f_name}")
-
-
-def get_images(path, conn):
-
-    # Busco todas las imagenes en la carpeta l que tengan extension .tif
-    i = 0
-    for file in os.listdir(path):
-        if not file.endswith(".tif") and not file.endswith(".TIF"):
-            continue
-        i += 1
-        file_path = os.path.join(path, file)
-        log(f"Apilamiento {i} con {file_path}")
-
-        start_time = time.time()  # Tomo el tiempo proceso para la imagen
-
-        img = Image.open(file_path)  # Abro la imagen
-        im_array = np.asarray(img)  # Tomo la matriz
-        img.close()
-
-        log(f"To Array time: {time.time() - start_time}")
-
-        conn.send(im_array)
-    conn.send(None)
-    conn.close()
 
 
 def main():
