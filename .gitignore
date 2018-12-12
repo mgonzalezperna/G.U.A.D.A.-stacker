@@ -3,3 +3,6 @@
 logs.txt
 *.tif
 Thumbs.db
+logs/*
+*.CR2
+*.zip

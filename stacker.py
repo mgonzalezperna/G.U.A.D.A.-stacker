@@ -14,10 +14,14 @@ except ImportError:
 
 WIDTH = 3280
 HEIGHT = 2464
+logName = time.strftime("%Y%m%d-%H%M%S")
+if not os.path.exists('logs'):
+    os.makedirs('logs')
 
 
 def log(data):
-    with open('logs.txt', 'a') as fd:
+    print(data)
+    with open(f"logs/{logName}.txt", 'a') as fd:
         fd.write("%s\n" % data)
 
 
@@ -46,13 +50,14 @@ class Config:
     with_profiling = False
     with_camera = False
     inputFolder = 'test'
-    outputFolder = './'
+    outputFolder = 'out/'
 
     def __init__(self):
         import sys
         import getopt
         optlist, _ = getopt.getopt(
-            sys.argv[1:], 'cpi:o:',  ['camera', 'profile', 'input=', 'output='])
+            sys.argv[1:], 'cpi:o:',
+            ['camera', 'profile', 'input=', 'output='])
         # '--camera --profile --input /lights'
         for o, a in optlist:
             if o in ("-p", "--profile"):
@@ -62,7 +67,10 @@ class Config:
             elif o in ("-i", "--input"):
                 self.inputFolder = a
             elif o in ("-o", "--output"):
-                self.outputFolder = a if a.endswith("/") else a + "/"
+                if a.endswith("/") or a == "":
+                    self.outputFolder = a
+                else:
+                    self.outputFolder = a + "/"
 
 
 class ImgReference:
@@ -90,16 +98,6 @@ class ImgCutoff:
         self.bottom = 0
 
 
-class ImgDiscrepancy:
-    # Diferencia entre la referencia y la actual
-    def __init__(self):
-        self.x = float("inf")
-        self.y = float("inf")
-
-    def get_total_diff(self):
-        return self.x + self.y
-
-
 class Stacker:
     def __init__(self):
         # Total de imagenes procesadas (Para calcular el promedio)
@@ -115,7 +113,7 @@ class Stacker:
 
         self.max_cutoff = 150
 
-        self.max_dark_to_test = 255  # 128
+        self.max_dark_to_test = 128  # 128
 
     def stack(self, im):
         # Apilo la imagen con el resultado previo
@@ -140,7 +138,8 @@ class Stacker:
 
     def get_reference_array(self, img):
         # Obtengo los valores de los ejes
-        img = np.clip(img, self.max_dark_to_test, None)  # Corto los colores mas oscuros
+        img = np.clip(img, self.max_dark_to_test, None)
+        # Corto los colores mas oscuros
         # Me interesa los mas claros que es donde estan las estrellas
         # Si no lo hago el ruido en la oscuridad puede afectar
         # demaciado el resultado del alineamiento
@@ -163,21 +162,19 @@ class Stacker:
         reference_im2 = self.get_reference_array(im)
 
         best_cutoff = ImgCutoff()  # Contiene el mejor resultado obtenido
-        discrepancy = ImgDiscrepancy()
 
         # Para eje X
-        best_cutoff.left, discrepancy.x = self.try_alignment(
+        best_cutoff.left, discrepancy_x = self.try_alignment(
             reference_im1.x, reference_im2.x, self.cutoff.left
         )
 
         # Para eje Y
-        best_cutoff.top, discrepancy.y = self.try_alignment(
+        best_cutoff.top, discrepancy_y = self.try_alignment(
             reference_im1.y, reference_im2.y, self.cutoff.top
         )
 
-        log(f"""Aligned at:
-        x: {best_cutoff.left} y: {best_cutoff.top}
-        v: {discrepancy.get_total_diff()}""")
+        log(f"""Aligned at: x: {best_cutoff.left} y: {best_cutoff.top}
+        v: {discrepancy_x + discrepancy_y}""")
 
         # Muevo los valores (pixeles) de las referencias de la imagen con el
         # mejor valor de alineamiento
@@ -221,14 +218,10 @@ class Stacker:
         return im_diff.mean()
 
     def process_from_filesystem(self, path):
-        i = 0
         # Busco todas las imagenes en la carpeta l que tengan extension .tif
         for file in os.listdir(path):
-            if not file.endswith(".tif"):
+            if not file.endswith(".tif") and not file.endswith(".TIF"):
                 continue
-            i += 1
-            if i == 3:
-                break
 
             file_path = os.path.join(path, file)
             log(f"Apilamiento {self.total_stacks} con {file_path}")
@@ -275,7 +268,7 @@ class Stacker:
             self.result = self.stack(im_array)
             self.total_stacks += 1
 
-    def save_image(self, outputFolder):
+    def save_image(self, output_folder):
 
         if self.result is None:
             raise Exception("No existe un resultado!")
@@ -289,7 +282,10 @@ class Stacker:
         # image = image.filter(
         #   ImageFilter.UnsharpMask(radius=2, percent=250, threshold=7))
 
-        f_name = outputFolder + time.strftime("%Y%m%d-%H%M%S") + ".tif"
+        if not os.path.exists(output_folder):
+            os.makedirs(output_folder)
+
+        f_name = output_folder + time.strftime("%Y%m%d-%H%M%S") + ".tif"
         image.save(f_name, "TIFF")
         image.close()
         log(f"Saved: {f_name}")
@@ -312,7 +308,7 @@ def main():
         stacker.process_from_filesystem(config.inputFolder)
     stacker.save_image(config.outputFolder)
     log(f"Total elapsed time: {time.time() - start_time}")
-    
+
     if config.with_profiling:
         pr.disable()
         save_profile(pr)
