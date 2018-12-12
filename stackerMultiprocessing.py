@@ -18,7 +18,7 @@ if not os.path.exists('logs'):
 def log(data):
     print(data)
     with open(f"logs/{logName}.txt", 'a') as fd:
-        fd.write("%s\n" % data)
+        fd.write(f"{data}\n")
 
 
 def get_image(camera):
