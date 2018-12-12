@@ -219,9 +219,14 @@ class Stacker:
         return im_diff.mean()
 
     def process_from_filesystem(self, path):
+        self.start_queue(self.get_images_from_path, path)
 
+    def process_from_camera(self):
+        self.start_queue(self.get_images_from_camera)
+    
+    def start_queue(self, process, *extra_args):
         parent_conn, child_conn = Pipe()
-        p = Process(target=self.get_images_from_path, args=(child_conn, path,))
+        p = Process(target=process, args=(child_conn, *extra_args))
         p.start()
 
         running = True
@@ -255,23 +260,6 @@ class Stacker:
             conn.send(im_array)
         conn.send(None)
         conn.close()
-
-    def process_from_camera(self):
-        parent_conn, child_conn = Pipe()
-        p = Process(target=self.get_images_from_camera, args=(child_conn,))
-        p.start()
-
-        running = True
-        while running:
-            im_array = parent_conn.recv()
-            if im_array is None:
-                running = False
-            else:
-                # Tomo el tiempo proceso para la imagen
-                start_time = time.time()
-                self.process_im_array(im_array)
-                log(f"Process time: {time.time() - start_time}")
-        p.join()
 
     def get_images_from_camera(self, conn):
         camera = get_camera()
