@@ -7,12 +7,6 @@ from fractions import Fraction
 import numpy as np
 from PIL import Image
 
-try:
-    from picamera import PiCamera
-    import picamera.array
-except ImportError:
-    print("No Picamera")
-
 WIDTH = 3280
 HEIGHT = 2464
 logName = time.strftime("%Y%m%d-%H%M%S")
@@ -35,6 +29,9 @@ def get_image(camera):
 
 
 def get_camera():
+    from picamera import PiCamera
+    import picamera.array
+
     camera = PiCamera(resolution=(WIDTH, HEIGHT), framerate=30)
 
     camera.resolution = (WIDTH, HEIGHT)
@@ -262,14 +259,18 @@ class Stacker:
         conn.close()
 
     def get_images_from_camera(self, conn):
-        camera = get_camera()
-        # Capturo imagenes desde la camara
-        for _ in range(5):
-            log("Capturando")
-            start_time = time.time()  # Tomo el tiempo proceso para la imagen
-            im_array = get_image(camera)
-            log(f"Captura: {time.time() - start_time}")
-            conn.send(im_array)
+        try:
+            camera = get_camera()
+        except ImportError:
+            print("No Picamera")
+        else:
+            # Capturo imagenes desde la camara
+            for _ in range(5):
+                log("Capturando")
+                start_time = time.time()  # Tomo el tiempo proceso para la imagen
+                im_array = get_image(camera)
+                log(f"Captura: {time.time() - start_time}")
+                conn.send(im_array)
         conn.send(None)
         conn.close()
 
