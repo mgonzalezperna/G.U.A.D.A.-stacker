@@ -1,30 +1,40 @@
 from multiprocessing import Process, Pipe
 import time
+import random
 
+def giveNumber():
+    return True, random.randint(1, 9)
+
+def stopNumber():
+    return False, 0
 
 def f(conn):
-    while not conn.poll():
-        pass
-    num = conn.recv()
-    time.sleep(num)
-    conn.send([42, None, 'hello'])
+    running = True
+    while running:
+        if conn.poll():
+            action = conn.recv()
+            running, number = action()
+            time.sleep(number)
+            conn.send({'num':number})
     conn.close()
 
 if __name__ == '__main__':
     parent_conn, child_conn = Pipe()
     p = Process(target=f, args=(child_conn,))
     p.start()
-    
-    num = input('How long to wait: ')
- 
-    try:
-        num = float(num)
-    except ValueError:
-        print('Please')
-        num = 1
-    parent_conn.send(num)
 
-    while not parent_conn.poll():
-        pass
-    print(parent_conn.recv())   # prints "[42, None, 'hello']"
+    parent_conn.send(giveNumber)
+    time.sleep(9)
+    running = True
+    while running:
+        in_action = input('How long to wait: ')
+        action = stopNumber
+        if in_action != '0':
+            action = giveNumber
+        else:
+            running = False
+        parent_conn.send(action)
+        while not parent_conn.poll():
+            pass
+        print(parent_conn.recv())
     p.join()
