@@ -237,15 +237,12 @@ class Stacker:
         p.join()
 
     def get_images_from_path(self, conn, path):
-
         # Busco todas las imagenes en la carpeta l que tengan extension .tif
-        i = 0
         for file in os.listdir(path):
             if not file.endswith(".tif") and not file.endswith(".TIF"):
                 continue
-            i += 1
             file_path = os.path.join(path, file)
-            log(f"Apilamiento {i} con {file_path}")
+            log(f"Apilamiento con {file_path}")
 
             start_time = time.time()  # Tomo el tiempo proceso para la imagen
 
@@ -253,28 +250,40 @@ class Stacker:
             im_array = np.asarray(img)  # Tomo la matriz
             img.close()
 
-            log(f"To Array time: {time.time() - start_time}")
+            log(f"To Array: {time.time() - start_time}")
 
             conn.send(im_array)
         conn.send(None)
         conn.close()
 
     def process_from_camera(self):
-        camera = get_camera()
+        parent_conn, child_conn = Pipe()
+        p = Process(target=self.get_images_from_camera, args=(child_conn,))
+        p.start()
 
+        running = True
+        while running:
+            im_array = parent_conn.recv()
+            if im_array is None:
+                running = False
+            else:
+                # Tomo el tiempo proceso para la imagen
+                start_time = time.time()
+                self.process_im_array(im_array)
+                log(f"Process time: {time.time() - start_time}")
+        p.join()
+
+    def get_images_from_camera(self, conn):
+        camera = get_camera()
         # Capturo imagenes desde la camara
         for _ in range(5):
-            log(f"Apilamiento: {self.total_stacks}")
+            log("Capturando")
             start_time = time.time()  # Tomo el tiempo proceso para la imagen
-
             im_array = get_image(camera)
-            log("Got Image")
-
-            self.process_im_array(im_array)
-
-            log(f"Elapsed time: {time.time() - start_time}")
-            # if self.result is not None:
-            #     self.save_image()
+            log(f"Captura: {time.time() - start_time}")
+            conn.send(im_array)
+        conn.send(None)
+        conn.close()
 
     def process_im_array(self, im_array):
         # La primera imagen la guardo como resultado
