@@ -3,6 +3,7 @@ import time
 from multiprocessing import Process
 from multiprocessing import Pipe
 from fractions import Fraction
+from functools import partial
 
 import numpy as np
 from PIL import Image
@@ -21,6 +22,7 @@ def log(data):
 
 
 def get_image(camera):
+    import picamera.array
     output = picamera.array.PiRGBArray(camera)
     time.sleep(5)
     # output = np.empty((WIDTH, HEIGHT, 3), dtype=np.uint8)
@@ -30,8 +32,6 @@ def get_image(camera):
 
 def get_camera():
     from picamera import PiCamera
-    import picamera.array
-
     camera = PiCamera(resolution=(WIDTH, HEIGHT), framerate=30)
 
     camera.resolution = (WIDTH, HEIGHT)
@@ -42,6 +42,8 @@ def get_camera():
     time.sleep(2)
     return camera
 
+def get_snapper():
+    partial(get_image, get_camera())
 
 class Config:
 
@@ -260,7 +262,7 @@ class Stacker:
 
     def get_images_from_camera(self, conn):
         try:
-            camera = get_camera()
+            snapper = get_snapper()
         except ImportError:
             print("No Picamera")
         else:
@@ -268,7 +270,7 @@ class Stacker:
             for _ in range(5):
                 log("Capturando")
                 start_time = time.time()  # Tomo el tiempo proceso para la imagen
-                im_array = get_image(camera)
+                im_array = snapper()
                 log(f"Captura: {time.time() - start_time}")
                 conn.send(im_array)
         conn.send(None)
