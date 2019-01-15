@@ -17,8 +17,8 @@ if not os.path.exists('logs'):
 
 def log(data):
     print(data)
-    with open(f"logs/{logName}.txt", 'a') as fd:
-        fd.write(f"{data}\n")
+    with open("logs/%s.txt" % logName, 'a') as fd:
+        fd.write("%s\n" % data)
 
 
 def get_image(camera):
@@ -42,8 +42,10 @@ def get_camera():
     time.sleep(2)
     return camera
 
+
 def get_snapper():
-    partial(get_image, get_camera())
+    return partial(get_image, get_camera())
+
 
 class Config:
 
@@ -173,8 +175,8 @@ class Stacker:
             reference_im1.y, reference_im2.y, self.cutoff.top
         )
 
-        log(f"""Aligned at: x: {best_cutoff.left} y: {best_cutoff.top}
-        v: {discrepancy_x + discrepancy_y}""")
+        log("Aligned at: x: %d y: %d v: %f" % (best_cutoff.left,
+            best_cutoff.top, discrepancy_x + discrepancy_y))
 
         # Muevo los valores (pixeles) de las referencias de la imagen con el
         # mejor valor de alineamiento
@@ -237,7 +239,7 @@ class Stacker:
                 # Tomo el tiempo proceso para la imagen
                 start_time = time.time()
                 self.process_im_array(im_array)
-                log(f"Process time: {time.time() - start_time}")
+                log("Process time: %f" % (time.time() - start_time))
         p.join()
 
     def get_images_from_path(self, conn, path):
@@ -246,7 +248,7 @@ class Stacker:
             if not file.endswith(".tif") and not file.endswith(".TIF"):
                 continue
             file_path = os.path.join(path, file)
-            log(f"Apilamiento con {file_path}")
+            log("Apilamiento con %s" % file_path)
 
             start_time = time.time()  # Tomo el tiempo proceso para la imagen
 
@@ -254,7 +256,7 @@ class Stacker:
             im_array = np.asarray(img)  # Tomo la matriz
             img.close()
 
-            log(f"To Array: {time.time() - start_time}")
+            log("To Array: %f" % (time.time() - start_time))
 
             conn.send(im_array)
         conn.send(None)
@@ -269,9 +271,9 @@ class Stacker:
             # Capturo imagenes desde la camara
             for _ in range(5):
                 log("Capturando")
-                start_time = time.time()  # Tomo el tiempo proceso para la imagen
+                start_time = time.time()
                 im_array = snapper()
-                log(f"Captura: {time.time() - start_time}")
+                log("Captura: %f" % (time.time() - start_time))
                 conn.send(im_array)
         conn.send(None)
         conn.close()
@@ -307,7 +309,7 @@ class Stacker:
         f_name = output_folder + time.strftime("%Y%m%d-%H%M%S") + ".tif"
         image.save(f_name, "TIFF")
         image.close()
-        log(f"Saved: {f_name}")
+        log("Saved: %s" % f_name)
 
 
 def main():
@@ -326,7 +328,7 @@ def main():
     else:
         stacker.process_from_filesystem(config.inputFolder)
     stacker.save_image(config.outputFolder)
-    log(f"Total elapsed time: {time.time() - start_time}")
+    log("Total elapsed time: %f" % (time.time() - start_time))
 
     if config.with_profiling:
         pr.disable()
@@ -343,8 +345,8 @@ def save_profile(profile):
 
 
 if __name__ == "__main__":
-    start = time.strftime("%Y%m%d-%H%M%S")
-    log(f"Started at: {start}")
+    start = time.strftime("%Y/%m/%d %H:%M:%S")
+    log("Started at: %s" % start)
     main()
-    end = time.strftime("%Y%m%d-%H%M%S")
-    log(f"Ended at: {end}\n")
+    end = time.strftime("%Y/%m/%d %H:%M:%S")
+    log("Ended at: %s\n" % end)
